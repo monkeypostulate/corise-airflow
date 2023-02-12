@@ -17,8 +17,12 @@ from airflow.decorators import dag, task # DAG and task decorators for interfaci
     catchup=False,
     default_args={
         "retries": 2, # If a task fails, it will retry 2 times.
+        #owner
+        "owner" : 'abel camacho',
+        # DAG ID
+        "dag_id" : 'course_first_week_project',
     },
-    tags=['example']) # If set, this tag is shown in the DAG view of the Airflow UI
+    tags=['course','example']) # If set, this tag is shown in the DAG view of the Airflow UI
 def energy_dataset_dag():
     """
     ### Basic ETL Dag
