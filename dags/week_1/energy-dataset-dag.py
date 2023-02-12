@@ -89,8 +89,10 @@ def energy_dataset_dag():
         
     @task
     def load(data: List[pd.DataFrame]):#unzip_result: List[pd.DataFrame]):        
-        data[0].to_csv("gs://documents-used-airflow/energy_weather_data.csv")
-
+#        data[0].to_csv("gs://documents-used-airflow/energy_weather_data.csv")
+        data[0].to_parquet('gs://documents-used-airflow/energy_weather_data.gzip',
+              compression='gzip')  
+        
     # TODO Add task linking logic here
     datasets_extract = extract()
     datasets_transformed = transform(datasets_extract)
