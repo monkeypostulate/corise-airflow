@@ -10,7 +10,7 @@ from airflow.decorators import dag, task # DAG and task decorators for interfaci
     schedule_interval="@daily",
     # This DAG is set to run for the first time on January 1, 2021. Best practice is to use a static
     # start_date. Subsequent DAG runs are instantiated based on scheduler_interval
-    start_date=datetime(2021, 1, 1),
+    start_date=datetime(2023, 1, 1),
     # When catchup=False, your DAG will only run for the latest schedule_interval. In this case, this means
     # that tasks will not be run between January 1, 2021 and 30 mins ago. When turned on, this DAG's first
     # run will be for the next 30 mins, per the schedule_interval
@@ -25,7 +25,6 @@ def energy_dataset_dag():
     This is a simple ETL data pipeline example that demonstrates the use of
     the TaskFlow API using two simple tasks to extract data from a zipped folder
     and load it to GCS.
-
     """
 
     @task
@@ -34,35 +33,68 @@ def energy_dataset_dag():
         #### Extract task
         A simple task that loads each file in the zipped file into a dataframe,
         building a list of dataframes that is returned.
-
         """
+        from google.cloud import storage
         from zipfile import ZipFile
-        # TODO Unzip files into pandas dataframes
+        import io
 
+        # Initialize the storage client
+        storage_client = storage.Client()
+        
+        # Define the name of the bucket and the folder
+        bucket_name = "documents-used-airflow"
+        folder_name = "energy-consumption-generation-prices-and-weather.zip"
+
+        # Get the bucket object
+        bucket = storage_client.get_bucket(bucket_name)
+        # Get the blob (file) object
+        blob = bucket.blob(folder_name)
+        content = blob.download_as_string()
+        # Create a file-like buffer to receive the content of the file
+        file = io.BytesIO(content)
+
+        with ZipFile(file, 'r') as zip_ref:
+            zip_ref.extractall("unziped_folder")
+    
+        energy_dataset = pd.read_csv("unziped_folder/energy_dataset.csv")
+        weather_features = pd.read_csv("unziped_folder/weather_features.csv")
+        
+        return [energy_dataset, weather_features]
+        
 
     @task
-    def load(unzip_result: List[pd.DataFrame]):
+    def transform(data: List[pd.DataFrame]):#unzip_result: List[pd.DataFrame]):
         """
         #### Load task
         A simple "load" task that takes in the result of the "transform" task, prints out the 
         schema, and then writes the data into GCS as parquet files.
         """
+        from datetime import datetime
 
-        from airflow.providers.google.cloud.hooks.gcs import GCSHook
+        data_combined = data[0].merge(data[1],
+                    left_on = 'time',
+                    right_on = 'dt_iso')
 
-        data_types = ['generation', 'weather']
+        day = list(map(lambda i: datetime.strptime(i, '%Y-%m-%d %H:%M:%S%z').day, data_combined.time))
+        month = list(map(lambda i: datetime.strptime(i, '%Y-%m-%d %H:%M:%S%z').month, data_combined.time))
+        year = list(map(lambda i: datetime.strptime(i, '%Y-%m-%d %H:%M:%S%z').year, data_combined.time))
 
-        # GCSHook uses google_cloud_default connection by default, so we can easily create a GCS client using it
-        # https://github.com/apache/airflow/blob/207f65b542a8aa212f04a9d252762643cfd67a74/airflow/providers/google/cloud/hooks/gcs.py#L133
-
-        # The google cloud storage github repo has a helpful example for writing from pandas to GCS:
-        # https://github.com/googleapis/python-storage/blob/main/samples/snippets/storage_fileio_pandas.py
+        data_combined['day'] = day
+        data_combined['month'] = month
+        data_combined['year'] = year
+        data_combined['one'] = 1
         
-        client = GCSHook().get_conn()       \
-        # TODO Add GCS upload code
-
+        return [data_combined]
+        
+        
+    @task
+    def load(data: List[pd.DataFrame]):#unzip_result: List[pd.DataFrame]):        
+        data[0].to_csv("gs://documents-used-airflow/energy_weather_data.csv")
 
     # TODO Add task linking logic here
-
+    datasets_extract = extract()
+    datasets_transformed = transform(datasets_extract)
+    load(datasets_transformed)
+    
 
 energy_dataset_dag = energy_dataset_dag()
