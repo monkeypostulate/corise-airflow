@@ -9,7 +9,10 @@ from airflow.operators.empty import EmptyOperator
 from airflow.models.dag import DAG
 from airflow.decorators import task, task_group
 
-TRAINING_DATA_PATH = 'week-2/price_prediction_training_data.csv'
+from airflow.contrib.sensors.file_sensor import FileSensor
+from airflow.sensors.base import PokeReturnValue
+
+TRAINING_DATA_PATH = 'price_prediction_training_data.csv'
 # DATASET_NORM_WRITE_BUCKET = '' # Modify here
 
 VAL_END_INDEX = 31056
@@ -23,18 +26,32 @@ def df_convert_dtypes(df, convert_from, convert_to):
 
 
 @task()
-def extract() -> List[pd.DataFrame]:
+def extract() -> Dict[str, pd.DataFrame]:
     """
     #### Extract task
     A simple task that loads each file in the zipped file into a dataframe,
     building a list of dataframes that is returned
-
-
     """
+
     from zipfile import ZipFile
-    filename = "/usr/local/airflow/dags/data/energy-consumption-generation-prices-and-weather.zip"
+    from google.cloud import storage
+    import io
+    storage_client = storage.Client()
+    bucket_name = "documents-used-airflow"
+    folder_name = "energy-consumption-generation-prices-and-weather.zip"
+
+    # Get the bucket object
+    bucket = storage_client.get_bucket(bucket_name)
+    # Get the blob (file) object
+    blob = bucket.blob(folder_name)
+    content = blob.download_as_string()
+    # Create a file-like buffer to receive the content of     the file
+    filename = io.BytesIO(content)
     dfs = [pd.read_csv(ZipFile(filename).open(i)) for i in ZipFile(filename).namelist()]
-    return dfs
+    return {
+        'df_energy': dfs[0],
+        'df_weather': dfs[1]
+    }
 
 
 @task
@@ -45,7 +62,6 @@ def post_process_energy_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
     # Drop columns that are all 0s\
-    import pandas as pd
     df = df.drop(['generation fossil coal-derived gas','generation fossil oil shale', 
                   'generation fossil peat', 'generation geothermal', 
                   'generation hydro pumped storage aggregated', 'generation marine', 
@@ -68,7 +84,6 @@ def post_process_weather_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare weather dataframe for merge with energy data
     """
-
 
     # Convert all ints to floats
     df = df_convert_dtypes(df, np.int64, np.float64)
@@ -191,6 +206,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
 @task
 def prepare_model_inputs(df_final: pd.DataFrame):
     """
@@ -201,7 +217,10 @@ def prepare_model_inputs(df_final: pd.DataFrame):
     """
     from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler
     from sklearn.decomposition import PCA
-    from airflow.providers.google.cloud.hooks.gcs import GCSHook
+    from google.cloud import storage
+
+    
+    storage_client = storage.Client()
 
     X = df_final[df_final.columns.drop('price actual')].values
     y = df_final['price actual'].values
@@ -218,28 +237,49 @@ def prepare_model_inputs(df_final: pd.DataFrame):
     X_pca = pca.transform(X_norm)
     dataset_norm = np.concatenate((X_pca, y_norm), axis=1)
     df_norm = pd.DataFrame(dataset_norm)
-    client = GCSHook().get_conn()
-    # 
-    write_bucket = client.bucket(DATASET_NORM_WRITE_BUCKET)
-    write_bucket.blob(TRAINING_DATA_PATH).upload_from_string(pd.DataFrame(dataset_norm).to_csv())
+  
+    bucket_name = "documents-used-airflow"
+    # Get the bucket object
+    bucket = storage_client.get_bucket(bucket_name)
+
+    bucket.blob(TRAINING_DATA_PATH).upload_from_string( df_norm.to_csv(), 'text/csv')
 
 
-@task
-def read_dataset_norm():
-    """
-    Read dataset norm from storage
 
-    CHALLENGE have this automatically read using a sensor
-    """
+# Begin: DAG
+ 
 
-    from airflow.providers.google.cloud.hooks.gcs import GCSHook
-    import io
-    client = GCSHook().get_conn()
-    read_bucket = client.bucket(DATASET_NORM_WRITE_BUCKET)
-    dataset_norm = pd.read_csv(io.BytesIO(read_bucket.blob(TRAINING_DATA_PATH).download_as_bytes())).to_numpy()
+@task.sensor(
+        poke_interval=30,
+        timeout=3600,
+        mode="poke")
+def read_dataset_norm() -> PokeReturnValue:
+    from google.cloud import storage
 
-    return dataset_norm
+    storage_client = storage.Client()
+    bucket_name = 'documents-used-airflow'
+    filename = 'price_prediction_training_data.csv'   
 
+    client = storage.Client()
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob(filename)
+    file_exists = blob.exists()
+
+    # Set the condition to True if the API response was 200
+    if file_exists:
+        is_done = True
+        dataset_norm  = pd.read_csv('gs://documents-used-airflow/price_prediction_training_data.csv')
+    else:
+        is_done = False
+        dataset_norm = None
+
+    # PokeReturnValue receives a flag indicating whether the criteria
+    # was met or not, as well as any XComs to pass downstream.
+    return PokeReturnValue(is_done = is_done, xcom_value = dataset_norm)
+
+# End: DAG
+    
+    
 
 def multivariate_data(dataset,
                       data_indices,
@@ -294,16 +334,24 @@ def train_xgboost(X_train, y_train, X_val, y_val) -> xgb.Booster:
 def produce_indices() -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     Produce zipped list of training and validation indices
-
     Each pair of training and validation indices should not overlap, and the
     training indices should never exceed the max of VAL_END_INDEX. 
-
     The number of pairs produced here will be equivalent to the number of 
     mapped 'format_data_and_train_model' tasks you have 
     """
     
     # TODO Modify here
+    train_set_size_percentage = 0.7
+    indices_list = []
+    number_samples = 1
+    for i in range(number_samples):
+        shuffled_indices = np.random.permutation(VAL_END_INDEX)
+        max_train_index = int(VAL_END_INDEX * train_set_size_percentage)
 
+        train_indices.append( shuffled_indices[: max_train_index])
+        val_indices.append(shuffled_indices[max_train_index  :])
+
+    return list(zip(train_indices, val_indices))   
 
 
 @task
@@ -335,6 +383,11 @@ def select_best_model(models: List[xgb.Booster]):
     """
 
    # TODO Modify here
+    import pickle
+
+    best_model = max(models, key=lambda x: x.best_score)
+    # Serialize the model using pickle
+    model_data = pickle.dumps(best_model)
 
 
 @task_group
@@ -366,18 +419,19 @@ def train_and_select_best_model():
        3. Mapping each element of that list onto the indices argument of format_data_and_train_model
        4. Calling select_best_model on the output of all of the mapped tasks to select the best model and 
           write it to GCS 
-
     Using different train/val splits, train multiple models and select the one with the best evaluation score.
     """
-
     past_history = 24
     future_target = 0
-    dataset_norm = read_dataset_norm()
 
     # TODO: Modify here to select best model and save it to GCS, using above methods including
     # format_data_and_train_model, produce_indices, and select_best_model
 
-
+    trained_models = format_data_and_train_model.partial(
+        dataset_norm=read_dataset_norm()
+    ).expand(indices=produce_indices())
+    select_best_model(trained_models)    
+    
 
 with DAG("energy_price_prediction",
     schedule_interval=None,
@@ -390,4 +444,3 @@ with DAG("energy_price_prediction",
         group_1 = join_data_and_add_features() 
         group_2 = train_and_select_best_model()
         group_1 >> group_2
- 
