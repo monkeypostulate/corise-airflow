@@ -381,7 +381,6 @@ def select_best_model(models: List[xgb.Booster]):
     write this to GCS. The best_score is an attribute of the model, and corresponds to
     the highest eval score yielded during training.
     """
-
    # TODO Modify here
     import pickle
 
@@ -389,7 +388,17 @@ def select_best_model(models: List[xgb.Booster]):
     # Serialize the model using pickle
     model_data = pickle.dumps(best_model)
 
+    
+    from google.cloud import storage
 
+    storage_client = storage.Client()
+    bucket_name = 'documents-used-airflow'
+
+    client = storage.Client()
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob('model.pickle')
+    blob.upload_from_string(model_data)
+    
 @task_group
 def join_data_and_add_features():
     """
@@ -427,10 +436,10 @@ def train_and_select_best_model():
     # TODO: Modify here to select best model and save it to GCS, using above methods including
     # format_data_and_train_model, produce_indices, and select_best_model
 
-    trained_models = format_data_and_train_model.partial(
+    models = format_data_and_train_model.partial(
         dataset_norm=read_dataset_norm()
     ).expand(indices=produce_indices())
-    select_best_model(trained_models)    
+    select_best_model(models)    
     
 
 with DAG("energy_price_prediction",
