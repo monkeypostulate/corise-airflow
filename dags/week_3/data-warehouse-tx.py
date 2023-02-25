@@ -1,60 +1,16 @@
 from datetime import datetime
-
-import pandas as pd
 from typing import List
 
-
+import pandas as pd
 from airflow.decorators import dag, task, task_group
+from airflow.operators.empty import EmptyOperator
 
-PROJECT_ID = "corise-airflow"
+from common.week_3.config import DATA_TYPES, normalized_columns
+
+
+# PROJECT_ID = # Modify HERE
 # DESTINATION_BUCKET = # Modify HERE
-BQ_DATASET_NAME = "timeseries_energy"
-
-DATA_TYPES = ["generation", "weather"] 
-
-
-normalized_columns = {
-    "generation": {
-        "time": "time",
-        "columns": 
-            [   
-                "total_load_actual",
-                "price_day_ahead",
-                "price_actual",
-                "generation_fossil_hard_coal",
-                "generation_fossil_gas",
-                "generation_fossil_brown_coal_lignite",
-                "generation_fossil_oil",
-                "generation_other_renewable",
-                "generation_waste",
-                "generation_biomass",
-                "generation_other",
-                "generation_solar",
-                "generation_hydro_water_reservoir",
-                "generation_nuclear",
-                "generation_hydro_run_of_river_and_poundage",
-                "generation_wind_onshore",
-                "generation_hydro_pumped_storage_consumption"
-
-            ]
-        },
-    "weather": {
-        "time": "dt_iso",
-        "columns": 
-            [
-                "city_name",
-                "temp",
-                "pressure",
-                "humidity",
-                "wind_speed",
-                "wind_deg",
-                "rain_1h",
-                "rain_3h",
-                "snow_3h",
-                "clouds_all",
-            ]
-        }
-    }
+# BQ_DATASET_NAME = # Modify HERE
 
 
 @dag(
@@ -80,8 +36,6 @@ def data_warehouse_transform_dag():
         #### Extract task
         A simple task that loads each file in the zipped file into a dataframe,
         building a list of dataframes that is returned
-
-
         """
         from zipfile import ZipFile
         filename = "/usr/local/airflow/dags/data/energy-consumption-generation-prices-and-weather.zip"
@@ -109,10 +63,10 @@ def data_warehouse_transform_dag():
             bucket.blob(f"week-3/{DATA_TYPES[index]}.parquet").upload_from_string(df.to_parquet(), "text/parquet")
             print(df.dtypes)
 
-    @task_group
+    @task
     def create_bigquery_dataset():
         from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator
-
+        EmptyOperator(task_id='placeholder')
         # TODO Modify here to create a BigQueryDataset if one does not already exist
         # This is where your tables and views will be created
     
@@ -120,7 +74,7 @@ def data_warehouse_transform_dag():
     @task_group
     def create_external_tables():
         from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateExternalTableOperator
-        tasks = []
+        EmptyOperator(task_id='placeholder')
 
         # TODO Modify here to produce two external tables, one for each data type, referencing the data stored in GCS
 
@@ -128,7 +82,6 @@ def data_warehouse_transform_dag():
         # field to specify DDL configuration parameters. If you don't, then you will see an error
         # related to the built table_resource specifying csvOptions even though the desired format is 
         # PARQUET.
-
 
 
     def produce_select_statement(timestamp_column: str, columns: List[str]) -> str:
@@ -144,12 +97,14 @@ def data_warehouse_transform_dag():
         # columns in each datasource from string to time. The utility function 'produce_select_statement'
         # accepts the timestamp column, and essential columns for each of the datatypes and build a 
         # select statement ptogrammatically, which can then be passed to the Airflow Operators.
+        EmptyOperator(task_id='placeholder')
 
 
-    @task_group
+    @task
     def produce_joined_view():
         from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
         # TODO Modify here to produce a view that joins the two normalized views on time
+        EmptyOperator(task_id='placeholder')
 
 
     unzip_task = extract()
@@ -157,7 +112,7 @@ def data_warehouse_transform_dag():
     create_bigquery_dataset_task = create_bigquery_dataset()
     load_task >> create_bigquery_dataset_task
     external_table_task = create_external_tables()
-    create_bigquery_dataset >> external_table_task
+    create_bigquery_dataset_task >> external_table_task
     normal_view_task = produce_normalized_views()
     external_table_task >> normal_view_task
     joined_view_task = produce_joined_view()
