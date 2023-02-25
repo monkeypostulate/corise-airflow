@@ -37,9 +37,24 @@ def data_warehouse_transform_dag():
         A simple task that loads each file in the zipped file into a dataframe,
         building a list of dataframes that is returned
         """
+        from google.cloud import storage
         from zipfile import ZipFile
-        filename = "/usr/local/airflow/dags/data/energy-consumption-generation-prices-and-weather.zip"
+        import io
+        # Initialize the storage client
+        storage_client = storage.Client()
+        #Define the name of the bucket and the folder
+        bucket_name = "documents-used-airflow"
+        folder_name = "energy-consumption-generation-prices-and-weather.zip"
+        # Get the bucket object
+        bucket = storage_client.get_bucket(bucket_name)
+        # Get the blob (file) object
+        blob = bucket.blob(folder_name)
+        content = blob.download_as_string()
+        # Create a file-like buffer to receive the content of the file
+        filename = io.BytesIO(content)
+
         dfs = [pd.read_csv(ZipFile(filename).open(i)) for i in ZipFile(filename).namelist()]
+        
         return dfs
 
 
@@ -51,26 +66,51 @@ def data_warehouse_transform_dag():
         columns to be BigQuery-compliant, and writes data to GCS.
         """
 
-        from airflow.providers.google.cloud.hooks.gcs import GCSHook
-        
-        client = GCSHook().get_conn()       
-        bucket = client.get_bucket(DESTINATION_BUCKET)
+#        from airflow.providers.google.cloud.hooks.gcs import GCSHook
+#        client = GCSHook().get_conn()       
+#        bucket = client.get_bucket(DESTINATION_BUCKET)
 
         for index, df in enumerate(unzip_result):
             df.columns = df.columns.str.replace(" ", "_")
             df.columns = df.columns.str.replace("/", "_")
             df.columns = df.columns.str.replace("-", "_")
-            bucket.blob(f"week-3/{DATA_TYPES[index]}.parquet").upload_from_string(df.to_parquet(), "text/parquet")
+#            bucket.blob(f"week-3/{DATA_TYPES[index]}.parquet").upload_from_string(df.to_parquet(), "text/parquet")
+
+            from google.cloud import bigquery
+            client = bigquery.Client()
+
+            dataset = bigquery.Dataset('theoreticalmonkey.test')
+
+            # TODO(developer): Specify the geographic location where the dataset should reside.
+            dataset.location = "US"
+
+            # Send the dataset to the API for creation, with an explicit timeout.
+            # Raises google.api_core.exceptions.Conflict if the Dataset already
+            # exists within the project.
+            dataset = client.create_dataset(dataset, timeout=30) 
             print(df.dtypes)
 
     @task
     def create_bigquery_dataset():
-        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator
-        EmptyOperator(task_id='placeholder')
+#        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator
+#        EmptyOperator(task_id='placeholder')
         # TODO Modify here to create a BigQueryDataset if one does not already exist
         # This is where your tables and views will be created
-    
+        
+        from google.cloud import bigquery
+        client = bigquery.Client()
 
+        dataset = bigquery.Dataset('theoreticalmonkey.airflow_week3')
+
+        # TODO(developer): Specify the geographic location where the dataset should reside.
+        dataset.location = "US"
+
+        # Send the dataset to the API for creation, with an explicit timeout.
+        # Raises google.api_core.exceptions.Conflict if the Dataset already
+        # exists within the project.
+        dataset = client.create_dataset(dataset, timeout=30)  
+
+        
     @task_group
     def create_external_tables():
         from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateExternalTableOperator
@@ -82,29 +122,50 @@ def data_warehouse_transform_dag():
         # field to specify DDL configuration parameters. If you don't, then you will see an error
         # related to the built table_resource specifying csvOptions even though the desired format is 
         # PARQUET.
+        from google.cloud import bigquery
+        client = bigquery.Client()
 
+        sql = """
+        CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.energy_dataset
+        OPTIONS(
+        format = 'CSV',
+        uris = ['gs://documents-used-airflow/energy_dataset.csv.csv']
+        );  
+        CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.weather_features
+        OPTIONS(
+        format = 'CSV',
+        uris = ['gs://documents-used-airflow/weather_features.csv']
+        );  
+        """
+        # Start the query, passing in the extra configuration.
+        query_job = client.query(sql)  # Make an API request.
+        query_job.result()     
+        
+        
 
     def produce_select_statement(timestamp_column: str, columns: List[str]) -> str:
         # TODO Modify here to produce a select statement by casting 'timestamp_column' to 
         # TIMESTAMP type, and selecting all of the columns in 'columns'
-        pass
+        print(1)
 
     @task_group
     def produce_normalized_views():
-        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
+        #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
         # TODO Modify here to produce views for each of the datasources, capturing only the essential
         # columns specified in normalized_columns. A key step at this stage is to convert the relevant 
         # columns in each datasource from string to time. The utility function 'produce_select_statement'
         # accepts the timestamp column, and essential columns for each of the datatypes and build a 
         # select statement ptogrammatically, which can then be passed to the Airflow Operators.
-        EmptyOperator(task_id='placeholder')
+        #EmptyOperator(task_id='placeholder')
+        print(1)
 
 
     @task
     def produce_joined_view():
-        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
+        #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
         # TODO Modify here to produce a view that joins the two normalized views on time
-        EmptyOperator(task_id='placeholder')
+        #EmptyOperator(task_id='placeholder')
+        print(1)
 
 
     unzip_task = extract()
