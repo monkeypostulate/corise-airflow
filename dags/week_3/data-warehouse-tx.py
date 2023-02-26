@@ -5,7 +5,7 @@ import pandas as pd
 from airflow.decorators import dag, task, task_group
 from airflow.operators.empty import EmptyOperator
 
-from common.week_3.config import DATA_TYPES, normalized_columns
+#from common.week_3.config import DATA_TYPES, normalized_columns
 
 
 # PROJECT_ID = # Modify HERE
@@ -79,7 +79,7 @@ def data_warehouse_transform_dag():
             from google.cloud import bigquery
             client = bigquery.Client()
 
-            dataset = bigquery.Dataset('theoreticalmonkey.test')
+            dataset = bigquery.Dataset('theoreticalmonkey.airflow_week3')
 
             # TODO(developer): Specify the geographic location where the dataset should reside.
             dataset.location = "US"
@@ -87,7 +87,7 @@ def data_warehouse_transform_dag():
             # Send the dataset to the API for creation, with an explicit timeout.
             # Raises google.api_core.exceptions.Conflict if the Dataset already
             # exists within the project.
-            dataset = client.create_dataset(dataset, timeout=30) 
+            dataset = client.create_dataset(dataset, timeout=30,exists_ok=True) 
             print(df.dtypes)
 
     @task
@@ -108,13 +108,14 @@ def data_warehouse_transform_dag():
         # Send the dataset to the API for creation, with an explicit timeout.
         # Raises google.api_core.exceptions.Conflict if the Dataset already
         # exists within the project.
-        dataset = client.create_dataset(dataset, timeout=30)  
+        dataset = client.create_dataset(dataset, timeout=30, 
+                               exists_ok=True)  
 
         
-    @task_group
+    @task
     def create_external_tables():
-        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateExternalTableOperator
-        EmptyOperator(task_id='placeholder')
+ #       from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateExternalTableOperator
+#        EmptyOperator(task_id='placeholder')
 
         # TODO Modify here to produce two external tables, one for each data type, referencing the data stored in GCS
 
@@ -129,7 +130,7 @@ def data_warehouse_transform_dag():
         CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.energy_dataset
         OPTIONS(
         format = 'CSV',
-        uris = ['gs://documents-used-airflow/energy_dataset.csv.csv']
+        uris = ['gs://documents-used-airflow/energy_dataset.csv']
         );  
         CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.weather_features
         OPTIONS(
@@ -147,8 +148,40 @@ def data_warehouse_transform_dag():
         # TODO Modify here to produce a select statement by casting 'timestamp_column' to 
         # TIMESTAMP type, and selecting all of the columns in 'columns'
         print(1)
+        from google.cloud import bigquery
+        client = bigquery.Client()
 
-    @task_group
+        sql = """
+        SELECT
+          CAST(time AS TIMESTAMP) TimeStamp,
+          total_load_actual,
+          price_day_ahead,
+          price_actual,
+          generation_fossil_hard_coal,
+          generation_fossil_gas,
+          generation_fossil_brown_coal_lignite,
+          generation_fossil_oil,
+          generation_other_renewable,
+          generation_waste,
+          generation_biomass,
+          generation_other,
+          generation_solar,
+          generation_hydro_water_reservoir,
+          generation_nuclear,
+          generation_hydro_run_of_river_and_poundage,
+        generation_wind_onshore,
+          generation_hydro_pumped_storage_consumption
+                FROM
+          `theoreticalmonkey.airflow_week3.energy_dataset`   
+"""
+# Start the query, passing in the extra configuration.
+        query_job = client.query(sql)  # Make an API request.
+        query_job.result()  
+        
+        
+        
+
+    @task
     def produce_normalized_views():
         #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
         # TODO Modify here to produce views for each of the datasources, capturing only the essential
@@ -157,15 +190,47 @@ def data_warehouse_transform_dag():
         # accepts the timestamp column, and essential columns for each of the datatypes and build a 
         # select statement ptogrammatically, which can then be passed to the Airflow Operators.
         #EmptyOperator(task_id='placeholder')
-        print(1)
+        from google.cloud import bigquery
+        client = bigquery.Client()
 
+        sql = """
+CREATE OR REPLACE VIEW 
+  `theoreticalmonkey.airflow_week3.normalized_energy_dataset`
+  AS
+  SELECT
+  CAST(time AS TIMESTAMP) TimeStamp,
+  total_load_actual,
+  price_day_ahead,
+  price_actual,
+  generation_fossil_hard_coal,
+  generation_fossil_gas,
+  generation_fossil_brown_coal_lignite,
+  generation_fossil_oil,
+  generation_other_renewable,
+  generation_waste,
+  generation_biomass,
+  generation_other,
+  generation_solar,
+  generation_hydro_water_reservoir,
+  generation_nuclear,
+  generation_hydro_run_of_river_and_poundage,
+  generation_wind_onshore,
+  generation_hydro_pumped_storage_consumption
+FROM
+  `theoreticalmonkey.airflow_week3.energy_dataset`
+  
+"""
+        # Start the query, passing in the extra configuration.
+        query_job = client.query(sql)  # Make an API request.
+        query_job.result()
+        
 
     @task
     def produce_joined_view():
         #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
         # TODO Modify here to produce a view that joins the two normalized views on time
         #EmptyOperator(task_id='placeholder')
-        print(1)
+        pass
 
 
     unzip_task = extract()
