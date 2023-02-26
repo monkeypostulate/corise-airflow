@@ -7,16 +7,23 @@ from airflow.operators.empty import EmptyOperator
 
 #from common.week_3.config import DATA_TYPES, normalized_columns
 
+from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator, BigQueryCreateEmptyTableOperator, BigQueryCreateExternalTableOperator
 
-# PROJECT_ID = # Modify HERE
-# DESTINATION_BUCKET = # Modify HERE
-# BQ_DATASET_NAME = # Modify HERE
+PROJECT_ID = "theoreticalmonkey"
+DESTINATION_BUCKET = "documents-used-airflow"
+BQ_DATASET_NAME = "airflow_week3"
+
 
 
 @dag(
-    schedule_interval=None,
-    start_date=datetime(2021, 1, 1),
+    schedule_interval="@daily",
+    start_date=datetime(2023, 1, 1),
     catchup=False,
+    default_args={
+        "retries": 2,
+        "owner" : 'abel camacho'
+    },
+    tags =['bigquery','example']
     ) 
 def data_warehouse_transform_dag():
     """
@@ -30,7 +37,7 @@ def data_warehouse_transform_dag():
     """
 
 
-    @task
+    @task(task_id = "extract_data_from_zip_file")
     def extract() -> List[pd.DataFrame]:
         """
         #### Extract task
@@ -58,7 +65,7 @@ def data_warehouse_transform_dag():
         return dfs
 
 
-    @task
+    @task(task_id = "move_data_to_gcs")
     def load(unzip_result: List[pd.DataFrame]):
         """
         #### Load task
@@ -66,82 +73,66 @@ def data_warehouse_transform_dag():
         columns to be BigQuery-compliant, and writes data to GCS.
         """
 
-#        from airflow.providers.google.cloud.hooks.gcs import GCSHook
-#        client = GCSHook().get_conn()       
-#        bucket = client.get_bucket(DESTINATION_BUCKET)
-
+        files_names = ['energy','weather']
         for index, df in enumerate(unzip_result):
             df.columns = df.columns.str.replace(" ", "_")
             df.columns = df.columns.str.replace("/", "_")
             df.columns = df.columns.str.replace("-", "_")
-#            bucket.blob(f"week-3/{DATA_TYPES[index]}.parquet").upload_from_string(df.to_parquet(), "text/parquet")
+            df.to_parquet("gs://documents-used-airflow/"+files_names[index]+"_dataset.parquet")
 
-            from google.cloud import bigquery
-            client = bigquery.Client()
-
-            dataset = bigquery.Dataset('theoreticalmonkey.airflow_week3')
-
-            # TODO(developer): Specify the geographic location where the dataset should reside.
-            dataset.location = "US"
-
-            # Send the dataset to the API for creation, with an explicit timeout.
-            # Raises google.api_core.exceptions.Conflict if the Dataset already
-            # exists within the project.
-            dataset = client.create_dataset(dataset, timeout=30,exists_ok=True) 
-            print(df.dtypes)
-
-    @task
-    def create_bigquery_dataset():
-#        from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyDatasetOperator
-#        EmptyOperator(task_id='placeholder')
-        # TODO Modify here to create a BigQueryDataset if one does not already exist
-        # This is where your tables and views will be created
-        
-        from google.cloud import bigquery
-        client = bigquery.Client()
-
-        dataset = bigquery.Dataset('theoreticalmonkey.airflow_week3')
-
-        # TODO(developer): Specify the geographic location where the dataset should reside.
-        dataset.location = "US"
-
-        # Send the dataset to the API for creation, with an explicit timeout.
-        # Raises google.api_core.exceptions.Conflict if the Dataset already
-        # exists within the project.
-        dataset = client.create_dataset(dataset, timeout=30, 
-                               exists_ok=True)  
+ 
 
         
+    create_bigquery_dataset = BigQueryCreateEmptyDatasetOperator( task_id = "create_dataset", project_id = PROJECT_ID,
+                                           dataset_id = BQ_DATASET_NAME,
+                                           exists_ok= True)
+
+
+#    @task_group()
+#    def create_external_tables():
+        
+#        create_external_table_weather = BigQueryCreateExternalTableOperator(
+#    task_id = "create_external_table_weather",
+#    destination_project_dataset_table = f"{BQ_DATASET_NAME}.weather_features",
+#    bucket = "documents-used-airflow",
+#    source_objects = ["weather_dataset.parquet"]#,
+#            source_format = "PARQUET"
+#            )
+        
+#        create_external_table_energy = BigQueryCreateExternalTableOperator(
+#    task_id="create_external_table_energy",
+#    destination_project_dataset_table=f"{BQ_DATASET_NAME}.energy_features",
+#    bucket = "documents-used-airflow",
+#    source_ob
+
     @task
     def create_external_tables():
- #       from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateExternalTableOperator
-#        EmptyOperator(task_id='placeholder')
-
-        # TODO Modify here to produce two external tables, one for each data type, referencing the data stored in GCS
-
-        # When using the BigQueryCreateExternalTableOperator, it's suggested you use the table_resource
-        # field to specify DDL configuration parameters. If you don't, then you will see an error
-        # related to the built table_resource specifying csvOptions even though the desired format is 
-        # PARQUET.
         from google.cloud import bigquery
         client = bigquery.Client()
 
         sql = """
-        CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.energy_dataset
+        CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.energy_features
         OPTIONS(
-        format = 'CSV',
-        uris = ['gs://documents-used-airflow/energy_dataset.csv']
+        format = 'PARQUET',
+        uris = ['gs://documents-used-airflow/energy_dataset.parquet']
         );  
         CREATE OR REPLACE EXTERNAL TABLE theoreticalmonkey.airflow_week3.weather_features
         OPTIONS(
-        format = 'CSV',
-        uris = ['gs://documents-used-airflow/weather_features.csv']
+        format = 'PARQUET',
+        uris = ['gs://documents-used-airflow/weather_dataset.parquet']
         );  
         """
         # Start the query, passing in the extra configuration.
         query_job = client.query(sql)  # Make an API request.
         query_job.result()     
+ 
+
+       
+            
+ #       create_external_table_weather = create_external_table_weather
         
+ #       create_external_table_energy = create_external_table_energy
+
         
 
     def produce_select_statement(timestamp_column: str, columns: List[str]) -> str:
@@ -172,76 +163,118 @@ def data_warehouse_transform_dag():
         generation_wind_onshore,
           generation_hydro_pumped_storage_consumption
                 FROM
-          `theoreticalmonkey.airflow_week3.energy_dataset`   
+          `theoreticalmonkey.airflow_week3.energy_features`   
 """
 # Start the query, passing in the extra configuration.
         query_job = client.query(sql)  # Make an API request.
         query_job.result()  
         
         
-        
-
-    @task
+    @task_group
     def produce_normalized_views():
-        #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
-        # TODO Modify here to produce views for each of the datasources, capturing only the essential
-        # columns specified in normalized_columns. A key step at this stage is to convert the relevant 
-        # columns in each datasource from string to time. The utility function 'produce_select_statement'
-        # accepts the timestamp column, and essential columns for each of the datatypes and build a 
-        # select statement ptogrammatically, which can then be passed to the Airflow Operators.
-        #EmptyOperator(task_id='placeholder')
-        from google.cloud import bigquery
-        client = bigquery.Client()
+        
+        create_normalized_energy_view = BigQueryCreateEmptyTableOperator(
+        task_id = "create_normalized_energy_view",
+        dataset_id = BQ_DATASET_NAME,
+        table_id="normalized_energy_view",
+        view={
+            "query" : f"""SELECT 
+          CAST(time AS TIMESTAMP) TimeStamp,
+          total_load_actual,
+          price_day_ahead,
+          price_actual,
+          generation_fossil_hard_coal,
+          generation_fossil_gas,
+          generation_fossil_brown_coal_lignite,
+          generation_fossil_oil,
+          generation_other_renewable,
+          generation_waste,
+          generation_biomass,
+          generation_other,
+          generation_solar,
+          generation_hydro_water_reservoir,
+          generation_nuclear,
+          generation_hydro_run_of_river_and_poundage,
+        generation_wind_onshore,
+          generation_hydro_pumped_storage_consumption FROM `{PROJECT_ID}.{BQ_DATASET_NAME}.energy_features`""",
+            "useLegacySql": False,
+        }
+    )
 
-        sql = """
-CREATE OR REPLACE VIEW 
-  `theoreticalmonkey.airflow_week3.normalized_energy_dataset`
-  AS
-  SELECT
-  CAST(time AS TIMESTAMP) TimeStamp,
-  total_load_actual,
-  price_day_ahead,
-  price_actual,
-  generation_fossil_hard_coal,
-  generation_fossil_gas,
-  generation_fossil_brown_coal_lignite,
-  generation_fossil_oil,
-  generation_other_renewable,
-  generation_waste,
-  generation_biomass,
-  generation_other,
-  generation_solar,
-  generation_hydro_water_reservoir,
-  generation_nuclear,
-  generation_hydro_run_of_river_and_poundage,
-  generation_wind_onshore,
-  generation_hydro_pumped_storage_consumption
-FROM
-  `theoreticalmonkey.airflow_week3.energy_dataset`
-  
-"""
-        # Start the query, passing in the extra configuration.
-        query_job = client.query(sql)  # Make an API request.
-        query_job.result()
+
+        create_normalized_weather_view = BigQueryCreateEmptyTableOperator(
+             task_id = "create_normalized_weather_view",
+             dataset_id = BQ_DATASET_NAME,
+             table_id="normalized_weather_view",
+             view={
+            "query" : f"""SELECT
+            CAST(dt_iso AS TIMESTAMP) AS TimeStamp,
+            city_name,
+            TEMP,
+            pressure,
+            humidity,
+            wind_speed,
+            wind_deg,
+            rain_1h,
+            rain_3h,
+            snow_3h,
+            clouds_all,
+          FROM `{PROJECT_ID}.{BQ_DATASET_NAME}.weather_features`""",
+            "useLegacySql": False,
+        }
+    )
+
         
 
-    @task
-    def produce_joined_view():
-        #from airflow.providers.google.cloud.operators.bigquery import BigQueryCreateEmptyTableOperator
-        # TODO Modify here to produce a view that joins the two normalized views on time
-        #EmptyOperator(task_id='placeholder')
-        pass
-
+        create_normalized_energy_view = create_normalized_energy_view
+        
+        create_normalized_weather_view = create_normalized_weather_view
+        
+        
+        
+    produce_joined_view = BigQueryCreateEmptyTableOperator(
+             task_id = "produce_joined_view",
+             dataset_id = BQ_DATASET_NAME,
+             table_id="enery_weather_view",
+             view={
+            "query" : f"""SELECT
+w.*
+,e.total_load_actual
+,e.price_day_ahead
+,e.price_actual
+,e.generation_fossil_hard_coal
+,e.generation_fossil_gas
+,e.generation_fossil_brown_coal_lignite
+,e.generation_fossil_oil
+,e.generation_other_renewable
+,e.generation_waste
+,e.generation_biomass
+,e.generation_other
+,e.generation_solar
+,e.generation_hydro_water_reservoir
+,e.generation_nuclear
+,e.generation_hydro_run_of_river_and_poundage
+,e.generation_wind_onshore
+,e.generation_hydro_pumped_storage_consumption
+FROM
+ `{PROJECT_ID}.{BQ_DATASET_NAME}.normalized_weather_view` AS w
+ INNER JOIN 
+  `{PROJECT_ID}.{BQ_DATASET_NAME}.normalized_energy_view` AS e
+  ON
+w.TimeStamp = e.TimeStamp""",
+            "useLegacySql": False,
+        }
+    )
 
     unzip_task = extract()
     load_task = load(unzip_task)
-    create_bigquery_dataset_task = create_bigquery_dataset()
+    create_bigquery_dataset_task = create_bigquery_dataset#()
     load_task >> create_bigquery_dataset_task
     external_table_task = create_external_tables()
     create_bigquery_dataset_task >> external_table_task
     normal_view_task = produce_normalized_views()
     external_table_task >> normal_view_task
-    joined_view_task = produce_joined_view()
+    joined_view_task = produce_joined_view
     normal_view_task >> joined_view_task
 
 
