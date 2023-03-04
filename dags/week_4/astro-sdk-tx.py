@@ -1,5 +1,5 @@
 import pandas as pd
-from airflow.decorators import DAG
+from airflow.models.dag import DAG
 from airflow.utils import timezone
 
 import astro.sql as aql
@@ -17,8 +17,8 @@ time_columns = {
 }
 
 filepaths = {
-    "generation": "gs://corise-airflow-weller/week-3/generation.parquet",
-    "weather": "gs://corise-airflow-weller/week-3/weather.parquet"
+    # "generation": fill in location of data from week 3
+    # "weather": " fill in location of data from week 3
 }
 
 
@@ -56,8 +56,11 @@ def join_tables(generation_table: Table, weather_table: Table):  # skipcq: PYL-W
     pass
 
               
-@dag(schedule_interval=None, start_date=datetime(2021, 1, 1), catchup=False)
-def astro_sdk_transform_dag
+with DAG(
+    dag_id="astro_sdk_transform_dag",
+    schedule_interval=None,
+    start_date=timezone.datetime(2022, 1, 1),
+) as dag:
     """
     ### Astro SDK Transform DAG
     This DAG performs four operations:
@@ -65,7 +68,6 @@ def astro_sdk_transform_dag
         2. Extracts nonzero columns from that table, using a custom Python function extending aql.dataframe
         3. Converts the timestamp column from that table, using a custom SQL statement extending aql.transform
         4. Joins the two tables produced at step 3 for each datatype on time
-
     Note that unlike other projects, the relations between objects is left out for you so you can get a more intuitive
     sense for how to work with Astro SDK. For some examples of how it can be used, check out 
     # https://github.com/astronomer/astro-sdk/blob/main/python-sdk/example_dags/example_google_bigquery_gcs_load_and_save.py
@@ -76,5 +78,3 @@ def astro_sdk_transform_dag
 
     # Cleans up all temporary tables produced by the SDK
     aql.cleanup()
-
-astro_sdk_transform_dag = astro_sdk_transform_dag()
